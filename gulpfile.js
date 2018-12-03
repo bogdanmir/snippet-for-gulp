@@ -1,157 +1,229 @@
-var autoprefixer = require('gulp-autoprefixer')
-var browserSync = require('browser-sync')
-var changed = require('gulp-changed')
-var cssnano = require('gulp-cssnano')
-var del = require('del')
-var gulp = require('gulp')
-var gulpIf = require('gulp-if')
-var imagemin = require('gulp-imagemin')
-var imageminJpegRecompress = require('imagemin-jpeg-recompress');
-var purifycss = require('gulp-purifycss');
-var runSequence = require('run-sequence')
-var sass = require('gulp-sass')
-var sourcemaps = require('gulp-sourcemaps')
-var uglify = require('gulp-uglify')
-var useref = require('gulp-useref')
-var wiredep = require('wiredep').stream
+var browserSync    = require('browser-sync')
+var critical       = require('critical')                  // current version - "0.9.1" ("1.0.0" - errors during build)
+var del            = require('del')
+var path           = require('path')
+var fs             = require('fs')
+var gulp           = require('gulp')
+var autoprefixer   = require('gulp-autoprefixer')
+var cache          = require('gulp-cache')
+var changed        = require('gulp-changed')
+var cleanCSS       = require('gulp-clean-css')
+var concat         = require('gulp-concat')
+var gulpIf         = require('gulp-if')
+var imagemin       = require('gulp-imagemin')
+var jpegRecompress = require('imagemin-jpeg-recompress')
+var sass           = require('gulp-sass')
+var sourcemaps     = require('gulp-sourcemaps')
+var uglify         = require('gulp-uglify')
+var useref         = require('gulp-useref')
+var runSequence    = require('run-sequence')
+var webp           = require('gulp-webp')
 
-var devPaths = {
-  bowerFolder: 'bower_components/',
-  allCss: 'src/scss/bower.scss',
-  scss: 'src/scss/',
-  css: 'src/css/',
-  scripts: 'src/js/',
-  images: 'src/img/*',
-  fonts: 'src/fonts/GT_Walsheim/',
-  html: 'src/',
-  footerFolder: 'src/',
-  footerTpl: 'src/*.html'
-}
-var distPaths = {
-  root: 'dist/',
-  css: 'dist/css/',
-  scripts: 'dist/js/',
-  images: 'dist/img/',
-  fonts: 'dist/fonts/GT_Walsheim/',
-  html: 'dist/',
-  footerFolder: 'dist/'
-}
-var flags = {
-  production: false
-}
+runSequence.options.ignoreUndefinedTasks = false;
+
+// custom modules
+var config = require('./config.js');
+var plugins = require('./assets/js/list_plugins.js');
+var flags = { production: false }
+
+
 
 // Development Tasks 
 // -----------------
 // Start browserSync server
 gulp.task('browserSync', function() {
-  browserSync({
-    server: {
-      baseDir: "src/",
-      routes: {"/bower_components": "bower_components"}
-    }
-  })
+  browserSync(config.sync)
 })
 // Sass convert
 gulp.task('sass', function() {
-  return gulp.src(devPaths.scss + '**/*.scss')
+  return gulp.src(config.devPaths.scss + '**/*.scss')
     .pipe(gulpIf(!flags.production, sourcemaps.init()))
     .pipe(sass().on('error', sass.logError))
-    .pipe(autoprefixer({ browsers: [
-        'last 2 versions', 
-        'android 4',
-        'opera 15'] }))
+    .pipe(autoprefixer({ browsers: config.settingsAutoprefixer.browsers }))
     .pipe(gulpIf(!flags.production, sourcemaps.write()))
-    // .pipe(gulpIf(flags.production, purifycss([devPaths.html + '**/*.html'])))
-    .pipe(changed(devPaths.css, { hasChanged: changed.compareSha1Digest }))
-    .pipe(gulp.dest(devPaths.css))
-    .pipe(browserSync.reload({
-      stream: true
-    }))
+    .pipe(changed(config.devPaths.css, { hasChanged: changed.compareSha1Digest }))
+    .pipe(gulp.dest(config.devPaths.css))
+    .pipe(browserSync.reload({ stream: true }))
 })
-// Automatically inject Less and Sass Bower dependencies
-gulp.task('bowerStyles', function () {
-  return gulp.src(devPaths.allCss)
-    .pipe(wiredep())
-    .pipe(gulp.dest(devPaths.scss))
+// concat all js files into one
+gulp.task('pluginsScripts', function () {
+  return gulp.src(plugins.plugins)
+    .pipe(concat('plugins.js'))
+    .pipe(gulp.dest(config.devPaths.scripts))
 })
-// Automatically inject js
-gulp.task('bowerScripts', function () {
-  return gulp.src(devPaths.footerTpl)
-    .pipe(wiredep())
-    .pipe(gulp.dest(devPaths.footerFolder))
+gulp.task('clean:webp', function() {
+  return del.sync(config.devPaths.images + 'webp')
 })
-// Copy-paste fontawesome
-gulp.task('fontAwesome', function() {
-  return gulp.src(devPaths.bowerFolder + 'font-awesome/fonts/*.{woff,woff2}')
-    .pipe(gulp.dest(devPaths.fonts))
+//Convert to webp
+gulp.task('convertImageToWebp', function() {
+  return gulp.src([config.devPaths.images + '**/*.{png,jpg,jpeg}', '!webp'])
+    .pipe(webp())
+    .pipe(gulp.dest(config.devPaths.images + '/webp'))
 })
-// Bower tasks
-gulp.task('bower', function(callback) {
-  runSequence('bowerStyles', 'bowerScripts', 'fontAwesome',
+// Clean and convert webp
+gulp.task('imageToWebp', function(callback) {
+  runSequence('clean:webp', 'convertImageToWebp',
     callback
   )
 })
 // Watchers
 gulp.task('watch', function() {
-  gulp.watch(devPaths.scss + '**/*.scss', ['sass'])
-  gulp.watch(devPaths.scripts + '**/*.js', browserSync.reload)
-  gulp.watch(devPaths.html + '**/*.html', browserSync.reload)
-  gulp.watch(['bower.json'], ['bower'])
+  gulp.watch(config.devPaths.scss + '**/*.scss', ['sass'])
+  gulp.watch(config.devPaths.scripts + '**/*.js', ['pluginsScripts'], browserSync.reload)
+  gulp.watch(config.devPaths.html + '**/*.{php,tpl,html}', browserSync.reload)
+  gulp.watch(config.devPaths.images + '**/*.{png,jpg,jpeg}', ['imageToWebp'])
 })
+
 
 
 // Production Tasks
 // -----------------
-//Clean before production
+// Clean before production
 gulp.task('clean:dist', function() {
-  return del.sync(distPaths.root);
+  return del.sync(config.distPaths.root)
 })
 // Contcatenation scripts
 gulp.task('useref', function() {
-  return gulp.src(devPaths.footerTpl)
+  return gulp.src(config.devPaths.headerTpl)
     .pipe(useref())
     .pipe(gulpIf('*.js', uglify()))
-    .pipe(gulpIf('*.css', cssnano()))
-    .pipe(gulp.dest(distPaths.footerFolder));
+    .pipe(gulp.dest(config.distPaths.headerFolder))
 })
 // Optimizing Images 
 gulp.task('images', function() {
-  return gulp.src(devPaths.images + '*')
-    .pipe(imagemin([
+  return gulp.src(config.devPaths.images + '**/*')
+    .pipe(cache(imagemin([
       imagemin.gifsicle(),
-      imageminJpegRecompress({
+      jpegRecompress({
         loops:4,
         min: 50,
         max: 95,
         quality:'high' 
       }),
       imagemin.optipng()
-    ]))
-    .pipe(gulp.dest(distPaths.images))
+    ])))
+    .pipe(gulp.dest(config.distPaths.images))
+})
+gulp.task('clear', function (done) {//clear cache with images - if needs
+  return cache.clearAll(done)
 })
 // Copy-paste fonts
 gulp.task('fonts', function() {
-  return gulp.src(devPaths.fonts + '*.{otf,woff,woff2}')
-  .pipe(gulp.dest(distPaths.fonts))
+  return gulp.src(config.devPaths.fonts + '**/*.{woff,woff2}')
+  .pipe(gulp.dest(config.distPaths.fonts))
 })
-
-gulp.task('move_css', function() {
-  return gulp.src(devPaths.css + '*.css')
-  .pipe(gulp.dest(distPaths.css))
+// Copy-paste nocombined js
+gulp.task('jsNoCombined', function() {
+  return gulp.src(config.devPaths.scripts + '/no_combined/*.js')
+  .pipe(uglify())
+  .pipe(gulp.dest(config.distPaths.scripts + '/no_combined/'))
 })
+// Minify css
+gulp.task('minify', function() {
+  return gulp.src(config.distPaths.css + '**/*.css')
+    .pipe(cleanCSS({level:{1:{specialComments:0}}}))
+    .pipe(gulp.dest(config.distPaths.css))
+})
+// Generate header for live
+function removeNoindex(index, arrayFiles) {
+  if (index != arrayFiles) {
+    fs.readFile(config.distPaths.html + arrFiles[index], 'utf8', function ( err, data ) {
+      data = data.replace('<meta name="robots" content="noindex">', '');
+      fs.writeFile(config.distPaths.html + arrFiles[index], data, function() {
+        removeNoindex(index + 1, arrayFiles);
+      });
+    });
+  }
+}
+gulp.task('generateHeaderLive', function () {
+  let indexEl = 0;
+  let lengthFiles = arrFiles.length;
+  removeNoindex(indexEl, lengthFiles);
+})
+// critical css
+var criticalProps = [];
+gulp.task('criticalCssSource', function() {
+  fs.readdirSync(config.devPaths.css).filter(function(file) {
+    if (file.indexOf(".css") > -1) {
+      criticalProps.push(config.devPaths.css + file);
+    }
+  })
+});
+function eachSourcesCritical(index, array) {
+  if (index != array) {
+    critical.generate({
+      base: config.critical.base,
+      inline: true,
+      include: config.critical.include,
+      ignore: config.critical.ignore,
+      src: arrFiles[index],
+      css: criticalProps,
+      dest: arrFiles[index],
+      minify: config.critical.minify,
+      timeout: config.critical.timeout,
+      height: config.critical.height,
+      width: config.critical.width
+    }).then(function (output) {
+      eachSourcesCritical(index + 1, array);
+    });
+  }
+}
+gulp.task('critical', ['criticalCssSource'], function (cb) {
+    let indexEl = 0;
+    let lengthCriticalSources = arrFiles.length;
+    eachSourcesCritical(indexEl, lengthCriticalSources);
+})
+var arrFiles = [];
+function getHTMLFiles() {
+  var directoryPath = path.join(config.devPaths.html);
+  fs.readdirSync(directoryPath).filter(function(file) {
+    if (file.indexOf(".html") > -1) {
+      arrFiles.push(file);
+    }
+  });
+}
+getHTMLFiles();
 
-//Default task - dev
+
+
+// development - local server - default task
 gulp.task('default', function(callback) {
-  runSequence(['bower', 'sass', 'browserSync'], 'watch',
+  runSequence(
+    'clean:dist',
+    'pluginsScripts',
+    'sass',
+    'imageToWebp',
+    'browserSync',
+    ['watch'],
     callback
   )
 })
-gulp.task('build', function(callback) {
+// production - dev server
+gulp.task('production', function(callback) {
   flags.production = true
   runSequence(
     'clean:dist',
+    'pluginsScripts',
     'sass',
-    ['useref', 'images', 'fonts', "move_css"],
+    'imageToWebp',
+    ['useref', 'jsNoCombined', 'images', 'fonts'],
+    'minify',
+    'critical',
+    callback
+  )
+})
+// production - live server
+gulp.task('production_live', function(callback) {
+  flags.production = true
+  runSequence(
+    'clean:dist',
+    'pluginsScripts',
+    'sass',
+    'imageToWebp',
+    ['useref', 'jsNoCombined', 'images', 'fonts'],
+    'generateHeaderLive',
+    'minify',
+    'critical',
     callback
   )
 })
